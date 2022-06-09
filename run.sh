@@ -2,6 +2,8 @@
 
 curl https://raw.githubusercontent.com/canha/golang-tools-install-script/master/goinstall.sh | bash -s -- --version 1.18
 
+source $HOME/.bashrc
+
 curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
 
 curl https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz -o oc.tar.gz
@@ -12,6 +14,8 @@ mv oc /usr/local/bin/
 mv kubectl /usr/local/bin/
 
 curl https://codeload.github.com/openshift/hypershift/zip/refs/heads/main -o hypershift.zip
+
+yum install unzip
 
 unzip hypershift.zip
 

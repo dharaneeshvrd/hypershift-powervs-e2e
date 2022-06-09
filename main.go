@@ -110,6 +110,13 @@ func setupEnv(clusterRegion string, clusterName string, hypershiftImage string) 
 		return fmt.Errorf("error running ibmcloud login %v", err)
 	}
 
+	osPluginInstallArgs := []string{"plugin", "install", "container-service"}
+	cmd = exec.Command("ibmcloud", osPluginInstallArgs...)
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("error running plugin install %v", err)
+	}
+
 	getClusterDetailsArgs := []string{"oc", "cluster", "get", "-c", clusterName, "--output", "json"}
 	cmd = exec.Command("ibmcloud", getClusterDetailsArgs...)
 	result, err := cmd.Output()
@@ -224,6 +231,7 @@ func main() {
 	err = setupEnv(options.ManagementClusterRegion, options.ManagementCluster, options.HypershiftOperatorImage)
 	if err != nil {
 		log.Printf("error setup env %w", err)
+		return
 	}
 
 	rune2e(options)
