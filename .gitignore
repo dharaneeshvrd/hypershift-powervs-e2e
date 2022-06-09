@@ -1,0 +1,6 @@
+.idea
+.log
+bin/
+config.json
+*.zip
+hypershift-main
