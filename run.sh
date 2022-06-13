@@ -1,11 +1,9 @@
 #!/bin/sh
 
-curl https://raw.githubusercontent.com/canha/golang-tools-install-script/master/goinstall.sh | bash -s -- --version 1.18
-
-source $HOME/.bashrc
-
+# Installing ibmcloud cli
 curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
 
+# Installing oc cli
 curl https://mirror.openshift.com/pub/openshift-v4/clients/oc/latest/linux/oc.tar.gz -o oc.tar.gz
 
 tar xzf oc.tar.gz

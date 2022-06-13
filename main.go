@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/openshift/hypershift/cmd/cluster/core"
-	"github.com/openshift/hypershift/cmd/cluster/powervs"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -17,24 +14,25 @@ import (
 )
 
 const (
-	clusterNameSuffix = "hyp-e2e"
-	infraIdSuffix     = "hyp-e2e-infra"
+	clusterNameSuffix       = "hyp-e2e"
+	infraIdSuffix           = "hyp-e2e-infra"
+	managementCluster       = "dhar-hyp-ocp"
+	managementClusterRegion = "jp-tok"
+	resourceGroup           = "ibm-hypershift-dev"
+	baseDomain              = "hypershift-ppc64le.com"
+	nodePoolReplicas        = "2"
+	releaseImagePath        = "quay.io/openshift-release-dev/ocp-release"
+)
+
+var (
+	powervsRegion      = []string{"osa"}
+	vpcRegion          = []string{"jp-osa"}
+	powervsRegionZoneM = map[string][]string{"osa": {"osa21"}}
 )
 
 type E2eOptions struct {
-	ManagementCluster       string              `json:"managementCluster"`
-	ManagementClusterRegion string              `json:"managementClusterRegion"`
-	PowervsRegion           []string            `json:"powervsRegion"`
-	VpcRegion               []string            `json:"vpcRegion"`
-	PowervsRegionZoneM      map[string][]string `json:"powervsRegionZoneM"`
-	SshKeyPath              string              `json:"sshKeyPath"`
-	ResourceGroup           string              `json:"resourceGroup"`
-	PullSecret              string              `json:"pullSecret"`
-	BaseDomain              string              `json:"baseDomain"`
-	NodePoolReplicas        int32               `json:"nodePoolReplicas"`
-	ReleaseImage            string              `json:"releaseImage"`
-	CpoImage                string              `json:"cpoImage"`
-	HypershiftOperatorImage string              `json:"hypershiftOperatorImage"`
+	SshKeyPath string `json:"sshKeyPath"`
+	PullSecret string `json:"pullSecret"`
 }
 
 var apiKey string
@@ -42,58 +40,68 @@ var apiKey string
 func createCluster(options E2eOptions, region string, zone string, vpcRegion string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	log.Printf("create cluster called with %s region, %s zone and %s vpc region", region, zone, vpcRegion)
-	ctx := context.Background()
 
-	coreCreateOpt := core.CreateOptions{
-		Namespace:                      "clusters",
-		ControlPlaneAvailabilityPolicy: "SingleReplica",
-		Render:                         false,
-		InfrastructureJSON:             "",
-		ServiceCIDR:                    "172.31.0.0/16",
-		PodCIDR:                        "10.132.0.0/14",
-		Wait:                           false,
-		Timeout:                        0,
-		ExternalDNSDomain:              "",
-		AdditionalTrustBundle:          "",
-		ImageContentSources:            "",
-	}
+	name := fmt.Sprintf("%s-%s", zone, clusterNameSuffix)
+	infraID := fmt.Sprintf("%s-%s", zone, infraIdSuffix)
+	sshKeyFile := options.SshKeyPath
+	pullSecretFile := options.PullSecret
 
-	coreCreateOpt.PowerVSPlatform = core.PowerVSPlatformOptions{
-		APIKey:        os.Getenv("IBMCLOUD_API_KEY"),
-		Region:        region,
-		Zone:          zone,
-		VpcRegion:     vpcRegion,
-		ResourceGroup: options.ResourceGroup,
-		SysType:       "s922",
-		ProcType:      "shared",
-		Processors:    "0.5",
-		Memory:        32,
-	}
-
-	coreCreateOpt.Name = fmt.Sprintf("%s-%s", zone, clusterNameSuffix)
-	coreCreateOpt.InfraID = fmt.Sprintf("%s-%s", zone, infraIdSuffix)
-	coreCreateOpt.SSHKeyFile = options.SshKeyPath
-	coreCreateOpt.PullSecretFile = options.PullSecret
-	coreCreateOpt.BaseDomain = options.BaseDomain
-	coreCreateOpt.NodePoolReplicas = options.NodePoolReplicas
-	coreCreateOpt.ReleaseImage = options.ReleaseImage
-	coreCreateOpt.ControlPlaneOperatorImage = options.CpoImage
-	log.Printf("core opt: %+v", coreCreateOpt)
-	err := powervs.CreateCluster(ctx, &coreCreateOpt)
+	resp, err := http.Get("https://multi.ocp.releases.ci.openshift.org/graph")
 	if err != nil {
-		log.Printf("error create cluster %s %v", coreCreateOpt.Name, err)
+		log.Printf("error retrieving release image %w", err)
 		return
 	}
 
-	log.Printf("create cluster completed %s", coreCreateOpt.Name)
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("error reading resp body for ocp nightly multi arch %w", err)
+		return
+	}
+
+	var releaseImages map[string]interface{}
+	err = json.Unmarshal(body, &releaseImages)
+	if err != nil {
+		log.Printf("error parsing get cluster output %w", err)
+		return
+	}
+	imageList := releaseImages["nodes"].([]interface{})
+	latestImage := imageList[0].(map[string]string)
+
+	releaseImage := fmt.Sprintf("%s:%s", releaseImagePath, latestImage["version"])
+
+	hypershiftCreateClusterArgs := []string{
+		"create", "cluster", "powervs",
+		"--region", region,
+		"--zone", zone,
+		"--vpc-region", vpcRegion,
+		"--name", name,
+		"--infra-id", infraID,
+		"--resource-group", resourceGroup,
+		"--base-domain", baseDomain,
+		"--pull-secret", pullSecretFile,
+		"--ssh-key", sshKeyFile,
+		"--release-image", releaseImage,
+		"--node-pool-replicas", nodePoolReplicas,
+	}
+
+	cmd := exec.Command("./hypershift-main/bin/hypershift", hypershiftCreateClusterArgs...)
+	log.Printf("create cluster command %v", cmd.String())
+	err = cmd.Run()
+
+	if err != nil {
+		log.Printf("error create cluster %s %w", name, err)
+		return
+	}
+
+	log.Printf("create cluster completed %s", name)
 }
 
 func rune2e(options E2eOptions) {
 	var wg sync.WaitGroup
 
-	for index, region := range options.PowervsRegion {
-		for _, zone := range options.PowervsRegionZoneM[region] {
-			vpcRegion := options.VpcRegion[index]
+	for index, region := range powervsRegion {
+		for _, zone := range powervsRegionZoneM[region] {
+			vpcRegion := vpcRegion[index]
 			go createCluster(options, region, zone, vpcRegion, &wg)
 			wg.Add(1)
 		}
@@ -102,32 +110,32 @@ func rune2e(options E2eOptions) {
 	wg.Wait()
 }
 
-func setupEnv(clusterRegion string, clusterName string, hypershiftImage string) error {
+func setupEnv(clusterRegion string, clusterName string) error {
 	loginArgs := []string{"login", fmt.Sprintf("--apikey=%s", apiKey), "-r", clusterRegion}
 	cmd := exec.Command("ibmcloud", loginArgs...)
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("error running ibmcloud login %v", err)
+		return fmt.Errorf("error running ibmcloud login %w", err)
 	}
 
 	osPluginInstallArgs := []string{"plugin", "install", "container-service"}
 	cmd = exec.Command("ibmcloud", osPluginInstallArgs...)
 	err = cmd.Run()
 	if err != nil {
-		return fmt.Errorf("error running plugin install %v", err)
+		return fmt.Errorf("error running plugin install %w", err)
 	}
 
 	getClusterDetailsArgs := []string{"oc", "cluster", "get", "-c", clusterName, "--output", "json"}
 	cmd = exec.Command("ibmcloud", getClusterDetailsArgs...)
 	result, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("error running get cluster %v", err)
+		return fmt.Errorf("error running get cluster %w", err)
 	}
 
 	var cluster map[string]interface{}
 	err = json.Unmarshal(result, &cluster)
 	if err != nil {
-		return fmt.Errorf("error parsing get cluster output %v", err)
+		return fmt.Errorf("error parsing get cluster output %w", err)
 	}
 
 	masterUrl := cluster["masterURL"].(string)
@@ -136,31 +144,31 @@ func setupEnv(clusterRegion string, clusterName string, hypershiftImage string) 
 
 	resp, err := http.Get(oauthUrl)
 	if err != nil {
-		return fmt.Errorf("error calling %s %v", oauthUrl, err)
+		return fmt.Errorf("error calling %s %w", oauthUrl, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("error reading resp body for %s %v", oauthUrl, err)
+		return fmt.Errorf("error reading resp body for %s %w", oauthUrl, err)
 	}
 
 	var oauthDetails map[string]interface{}
 	err = json.Unmarshal(body, &oauthDetails)
 	if err != nil {
-		return fmt.Errorf("error parsing get cluster output %v", err)
+		return fmt.Errorf("error parsing get cluster output %w", err)
 	}
 
 	tokenEP := oauthDetails["token_endpoint"].(string)
 	tokenEPUrl, err := url.Parse(tokenEP)
 	if err != nil {
-		return fmt.Errorf("error parsing token endpoint url %s %v", tokenEP, err)
+		return fmt.Errorf("error parsing token endpoint url %s %w", tokenEP, err)
 	}
 	oauthAuthorizeUrl := fmt.Sprintf("%s://%s/oauth/authorize?client_id=openshift-challenging-client&response_type=token", tokenEPUrl.Scheme, tokenEPUrl.Host)
 
 	req, err := http.NewRequest("GET", oauthAuthorizeUrl, nil)
 	if err != nil {
-		return fmt.Errorf("error creating request for %s %v", oauthAuthorizeUrl, err)
+		return fmt.Errorf("error creating request for %s %w", oauthAuthorizeUrl, err)
 	}
 
 	req.Header.Add("X-CSRF-Token", "a")
@@ -168,13 +176,13 @@ func setupEnv(clusterRegion string, clusterName string, hypershiftImage string) 
 
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("error calling %s %v", oauthAuthorizeUrl, err)
+		return fmt.Errorf("error calling %s %w", oauthAuthorizeUrl, err)
 	}
 
 	var accessToken string
 	locationUrl := resp.Request.URL
 	if err != nil {
-		return fmt.Errorf("error parsing location url %v", err)
+		return fmt.Errorf("error parsing location url %w", err)
 	}
 	locationUrlS := strings.Split(locationUrl.Fragment, "&")
 	for _, frag := range locationUrlS {
@@ -190,15 +198,15 @@ func setupEnv(clusterRegion string, clusterName string, hypershiftImage string) 
 	log.Printf("oc login cmd: %v", cmd.String())
 	err = cmd.Run()
 	if err != nil {
-		return fmt.Errorf("error running oc login %v", err)
+		return fmt.Errorf("error running oc login %w", err)
 	}
 
-	installHypershitPrereq := []string{"install", "--hypershift-image", hypershiftImage}
+	installHypershitPrereq := []string{"install"}
 	cmd = exec.Command("./hypershift-main/bin/hypershift", installHypershitPrereq...)
 	log.Println(cmd.String())
 	err = cmd.Run()
 	if err != nil {
-		return fmt.Errorf("error running hypershift install %v", err)
+		return fmt.Errorf("error running hypershift install %w", err)
 	}
 
 	return nil
@@ -228,7 +236,7 @@ func main() {
 
 	apiKey = os.Getenv("IBMCLOUD_API_KEY")
 
-	err = setupEnv(options.ManagementClusterRegion, options.ManagementCluster, options.HypershiftOperatorImage)
+	err = setupEnv(managementClusterRegion, managementCluster)
 	if err != nil {
 		log.Printf("error setup env %w", err)
 		return
@@ -237,21 +245,3 @@ func main() {
 	rune2e(options)
 	return
 }
-
-/*
-curl https://raw.githubusercontent.com/canha/golang-tools-install-script/master/goinstall.sh | bash -s -- --version 1.18
-curl -fsSL https://clis.cloud.ibm.com/install/linux | sh
-ibmcloud plugin install container-service
-ibmcloud login --apikey=<api_key> -r jp-tok
-ibmcloud ks cluster config --cluster dhar-hyp-ocp
-*/
-
-/*
-ibmcloud oc cluster get -c dhar-hyp-ocp
-get master url
-curl https://c115-e.jp-tok.containers.cloud.ibm.com:32385/.well-known/oauth-authorization-server
-get issuer
-curl -u 'apikey:<api_key>' -H "X-CSRF-Token: a" 'https://c115-e.jp-tok.containers.cloud.ibm.com:30181/oauth/authorize?client_id=openshift-challenging-client&response_type=token' -v
-get access token from location
-oc login --token=<access_token> --server=https://c115-e.jp-tok.containers.cloud.ibm.com:32385
-*/
