@@ -65,9 +65,9 @@ func createCluster(options E2eOptions, region string, zone string, vpcRegion str
 		return
 	}
 	imageList := releaseImages["nodes"].([]interface{})
-	latestImage := imageList[0].(map[string]string)
+	latestImage := imageList[0].(map[string]interface{})
 
-	releaseImage := fmt.Sprintf("%s:%s", releaseImagePath, latestImage["version"])
+	releaseImage := fmt.Sprintf("%s:%s", releaseImagePath, latestImage["version"].(string))
 
 	hypershiftCreateClusterArgs := []string{
 		"create", "cluster", "powervs",

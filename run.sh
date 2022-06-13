@@ -13,7 +13,7 @@ mv kubectl /usr/local/bin/
 
 curl https://codeload.github.com/openshift/hypershift/zip/refs/heads/main -o hypershift.zip
 
-yum install unzip
+yum install unzip -y
 
 unzip hypershift.zip
 
